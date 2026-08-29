@@ -58,7 +58,7 @@ const MOVES: Move[] = [
 
 type Grade = { filter: string; tint: string; tintAlpha: number };
 
-const GRADES: Record<string, Grade> = {
+const GRADES = {
   night: { filter: "contrast(1.14) brightness(0.955) saturate(1.05)", tint: "#2a4a8f", tintAlpha: 0.14 },
   sunset: { filter: "contrast(1.10) brightness(1.02) saturate(1.30)", tint: "#ff8a3d", tintAlpha: 0.12 },
   warm: { filter: "contrast(1.08) brightness(1.015) saturate(1.22)", tint: "#ffb066", tintAlpha: 0.08 },
@@ -67,7 +67,7 @@ const GRADES: Record<string, Grade> = {
   rain: { filter: "contrast(1.12) brightness(0.98) saturate(0.95)", tint: "#4f7fb5", tintAlpha: 0.12 },
   bright: { filter: "contrast(1.06) brightness(1.035) saturate(1.28)", tint: "#fff2cc", tintAlpha: 0.05 },
   dream: { filter: "contrast(1.02) brightness(1.03) saturate(1.34)", tint: "#ffb8e6", tintAlpha: 0.07 },
-};
+} satisfies Record<string, Grade>;
 
 const CYCLE = ["bright", "warm", "cool", "dream", "tense"];
 
@@ -85,7 +85,7 @@ function gradeFor(shot: Shot, i: number): Grade {
   if (has("memory", "dream", "flashback", "sky", "hope", "magic")) return GRADES.dream!;
   if (has("indoor", "room", "kitchen", "lamp", "warm")) return GRADES.warm!;
   if (has("cold", "rooftop", "hospital", "office", "school", "train")) return GRADES.cool!;
-  return GRADES[CYCLE[i % CYCLE.length] as string]!;
+  return (GRADES as Record<string, Grade>)[CYCLE[i % CYCLE.length] as string]!;
 }
 
 /* ------------------------------------------------------------------ */
@@ -193,7 +193,7 @@ export async function buildVideo(
     muxer = new Muxer({
       target: new StreamTarget({
         onData: (data, position) => {
-          void w.write({ type: "write", data, position });
+          void w.write({ type: "write", data: data.slice() as unknown as BufferSource, position });
         },
         chunked: true,
       }),
@@ -366,7 +366,7 @@ export async function buildVideo(
         if (encoderError) throw encoderError;
       }
 
-      current.close();
+      current?.close();
       current = incoming ?? (next ? await next.catch(() => null) : null);
       if (!current && i + 1 < shots.length) {
         // this panel's image is unusable — skip to the following one
