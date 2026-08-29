@@ -250,6 +250,71 @@ export function parseBible(bible: string): { name: string; traits: string }[] {
     .slice(0, 6);
 }
 
+/** Reads an explicit gender out of a bible line's traits. */
+export function genderOf(traits: string): "male" | "female" | null {
+  const t = ` ${traits.toLowerCase()} `;
+  const male = /\b(male|man|boy|father|dad|brother|son|uncle|husband|he|his)\b/.test(t);
+  const female = /\b(female|woman|girl|mother|mom|sister|daughter|aunt|wife|she|her)\b/.test(t);
+  if (male && !female) return "male";
+  if (female && !male) return "female";
+  // both matched: trust whichever token appears first
+  const mi = t.search(/\b(male|man|boy)\b/);
+  const fi = t.search(/\b(female|woman|girl)\b/);
+  if (mi === -1 && fi === -1) return null;
+  if (fi === -1) return "male";
+  if (mi === -1) return "female";
+  return mi < fi ? "male" : "female";
+}
+
+/**
+ * Deterministic gender repair. The text model occasionally writes "she" for a
+ * male character (or the reverse), and Flux then draws the wrong person. This
+ * rewrites pronouns and gendered nouns in the prompt to match the bible, and
+ * stamps an explicit gendered noun right after each character's name.
+ */
+export function enforceGender(prompt: string, bible?: string): string {
+  if (!bible) return prompt;
+  const entries = parseBible(bible).filter((e) => genderOf(e.traits));
+  if (entries.length === 0) return prompt;
+
+  const present = entries.filter((e) =>
+    new RegExp(`\\b${escapeRe(e.name)}\\b`, "i").test(prompt),
+  );
+  if (present.length === 0) return prompt;
+
+  let out = prompt;
+
+  // Only rewrite pronouns when a single character is in frame — with two
+  // characters we cannot tell which pronoun belongs to whom.
+  if (present.length === 1) {
+    const g = genderOf(present[0]!.traits)!;
+    const map: Record<string, string> =
+      g === "male"
+        ? { she: "he", her: "his", hers: "his", herself: "himself", woman: "man", girl: "boy", lady: "man", "young woman": "young man" }
+        : { he: "she", his: "her", him: "her", himself: "herself", man: "woman", boy: "girl", gentleman: "woman", "young man": "young woman" };
+    for (const [from, to] of Object.entries(map)) {
+      out = out.replace(new RegExp(`\\b${from}\\b`, "gi"), (m) =>
+        m[0] === m[0]!.toUpperCase() ? to[0]!.toUpperCase() + to.slice(1) : to,
+      );
+    }
+  }
+
+  // Stamp the gender next to each name so the renderer cannot misread it.
+  for (const e of present) {
+    const g = genderOf(e.traits)!;
+    const noun = g === "male" ? "male" : "female";
+    out = out.replace(
+      new RegExp(`\\b${escapeRe(e.name)}\\b(?!\\s*\\((male|female)\\))`, "g"),
+      `${e.name} (${noun})`,
+    );
+  }
+  return out;
+}
+
+function escapeRe(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 /**
  * Deterministic character lock: whichever API key renders this scene, the same
  * fixed traits are appended verbatim, so characters never drift between shots.
@@ -259,21 +324,31 @@ export function characterLock(prompt: string, bible?: string): string {
   if (!bible) return "";
   const entries = parseBible(bible);
   if (entries.length === 0) return "";
-  const lower = prompt.toLowerCase();
-  const matched = entries.filter((e) => lower.includes(e.name.toLowerCase()));
+  const matched = entries.filter((e) =>
+    new RegExp(`\\b${escapeRe(e.name)}\\b`, "i").test(prompt),
+  );
   // Only lock characters actually present in this scene — never inject
   // the whole cast into a prompt that doesn't mention them.
   if (matched.length === 0) return "";
   return (
-    "Fixed character appearance and GENDER (must match exactly in every panel, never swap or change gender): " +
-    matched.map((e) => `${e.name} is ${e.traits.replace(/\.$/, "")}`).join("; ") +
+    "Fixed character appearance and GENDER (must match exactly, never swap or change gender): " +
+    matched
+      .map((e) => {
+        const g = genderOf(e.traits);
+        const traits = e.traits.replace(/\.$/, "");
+        return g ? `${e.name} is ${g.toUpperCase()} — ${traits}` : `${e.name} is ${traits}`;
+      })
+      .join("; ") +
     "."
   );
 }
 
 export function composeImagePrompt(prompt: string, bible?: string): string {
-  const lock = characterLock(prompt, bible);
-  return `${STYLE}. ${sanitizePrompt(prompt)}. ${lock ? lock + " " : ""}${SINGLE_PANEL_GUARD}. 16:9 widescreen cinematic framing.`;
+  const fixed = enforceGender(sanitizePrompt(prompt), bible);
+  const lock = characterLock(fixed, bible);
+  // The gender lock goes FIRST: the earliest tokens carry the most weight in
+  // Flux, which is exactly where character identity has to be pinned.
+  return `${lock ? lock + " " : ""}${STYLE}. ${fixed}. ${SINGLE_PANEL_GUARD}. 16:9 widescreen cinematic framing.`;
 }
 
 /** Calls Flux.1 Schnell (free tier) with automatic retries. Always 16:9. */
