@@ -51,12 +51,13 @@ export async function zaiChat(
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-
           model: opts.model ?? CHAT_MODEL,
           temperature: opts.temperature ?? 0.6,
           // Disable Qwen3 thinking/reasoning mode so the model answers directly
-          // and returns much faster.
+          // and returns much faster. vLLM reads it from chat_template_kwargs;
+          // the flat flag is kept for gateways that look at the top level.
           enable_thinking: false,
+          chat_template_kwargs: { enable_thinking: false },
           max_tokens: opts.maxTokens ?? 4000,
           messages,
         }),
